@@ -29,10 +29,8 @@
 #include <stdarg.h>
 #include <string.h>
 #include <stddef.h>
-#include <unistd.h>
 #include <ctype.h>
 #include <errno.h>
-#include <fcntl.h>
 
 #include <csp/arch/csp_thread.h>
 
@@ -42,15 +40,22 @@
 #include <termios.h>
 #endif
 
-#ifdef SLASH_ASF
-#include <stdio_serial.h>
-#include <si_stdio.h>
+#ifdef HAVE_UNISTD_H
+#  include <unistd.h>
 #endif
 
-/* Configuration */
-#define SLASH_ARG_MAX		16	/* Maximum number of arguments */
-#define SLASH_SHOW_MAX		10	/* Maximum number of commands to list */
-#define SLASH_NOEXIT		1	/* Do not provide the builtin 'exit' cmd */
+#ifdef HAVE_FCNTL_H
+#  include <fcntl.h>
+#endif
+
+#ifdef SLASH_ASF
+#  include <stdio_serial.h>
+#  include <si_stdio.h>
+#endif
+
+#ifdef TARGET_LIKE_KUBOS_MSP430_GCC
+#  include <kubos-hal-msp430f5529/msp430-stdio.h>
+#endif
 
 /* Terminal codes */
 #define ESC '\x1b'
@@ -65,7 +70,7 @@ extern struct slash_command __start_slash;
 extern struct slash_command __stop_slash;
 
 /* Calculate command section size */
-static __attribute__((aligned(1))) const struct slash_command slash_size_dummy[2];
+static const struct slash_command slash_size_dummy[2];
 #define SLASH_COMMAND_SIZE ((intptr_t) &slash_size_dummy[1] - (intptr_t) &slash_size_dummy[0])
 
 #define slash_for_each_command(_c) \
@@ -177,24 +182,36 @@ static int slash_getchar(struct slash *slash)
 		vTaskDelay(1);
 #endif
 
-	if (slash_read(slash, &c, 1) < 1)
-		return -EIO;
+	// TODO: this delay loop is a workaround for not being able to peak ahead
+	// in the STDIO queue in KubOS RT, we need to add that to our UART library
+	while (slash_read(slash, &c, 1) < 1) {
+		vTaskDelay(50);
+	}
 
 	return c;
+}
+
+static int slash_putnl(struct slash *slash)
+{
+    return slash_write(slash, SLASH_NL, SLASH_NL_LEN);
 }
 
 int slash_getchar_nonblock(struct slash *slash)
 {
 	unsigned char c;
 
+#ifdef HAVE_FCNTL_H
 	/* Set nonblocking */
 	fcntl(slash->fd_read, F_SETFL, fcntl(slash->fd_read, F_GETFL) |  O_NONBLOCK);
+#endif
 
 	if (slash_read(slash, &c, 1) < 1)
 		return -EIO;
 
+#ifdef HAVE_FCNTL_H
 	/* Set back to blocking */
 	fcntl(slash->fd_read, F_SETFL, fcntl(slash->fd_read, F_GETFL) & ~O_NONBLOCK);
+#endif
 
 	return c;
 }
@@ -232,7 +249,6 @@ slash_command_find(struct slash *slash, char *line, size_t linelen, char **args)
 	struct slash_command *max_match_cmd = NULL;
 
 	slash_for_each_command(cmd) {
-
 		/* Skip commands that are longer than linelen */
 		if (linelen < strlen(cmd->name))
 			continue;
@@ -319,12 +335,12 @@ static void slash_command_usage(struct slash *slash, struct slash_command *comma
 {
 	const char *args = command->args ? command->args : "";
 	const char *type = command->func ? "usage" : "group";
-	slash_printf(slash, "%s: %s %s\n", type, command->name, args);
+	slash_println(slash, "%s: %s %s", type, command->name, args);
 }
 
 static void slash_command_description(struct slash *slash, struct slash_command *command)
 {
-	slash_printf(slash, "%-15s\n", command->name);
+	slash_println(slash, "%-15s", command->name);
 }
 
 int slash_execute(struct slash *slash, char *line)
@@ -335,7 +351,7 @@ int slash_execute(struct slash *slash, char *line)
 
 	command = slash_command_find(slash, line, strlen(line), &args);
 	if (!command) {
-		slash_printf(slash, "No such command: %s\n", line);
+		slash_println(slash, "No such command: %s", line);
 		return -ENOENT;
 	}
 
@@ -352,15 +368,17 @@ int slash_execute(struct slash *slash, char *line)
 
 	/* Build args */
 	if (slash_build_args(args, argv, &argc) < 0) {
-		slash_printf(slash, "Mismatched quotes\n");
+		slash_println(slash, "Mismatched quotes");
 		return -EINVAL;
 	}
 
+#ifdef HAVE_GETOPT
 	/* Reset state for getopt(3) */
 	optarg = 0;
 	optind = 0;
 	opterr = 1;
 	optopt = '?';
+#endif
 
 	slash->argc = argc;
 	slash->argv = argv;
@@ -418,7 +436,7 @@ static void slash_complete(struct slash *slash)
 
 			/* Print newline on first match */
 			if (matches == 1)
-				slash_printf(slash, "\n");
+				slash_putnl(slash);
 
 			/* We only print all commands over 1 match here */
 			if (matches > 1)
@@ -911,7 +929,7 @@ char *slash_readline(struct slash *slash, const char *prompt)
 	}
 
 	slash_restore_term(slash);
-	slash_putchar(slash, '\n');
+	slash_putnl(slash);
 	slash_history_add(slash, slash->buffer);
 
 	return ret;
@@ -945,7 +963,7 @@ static int slash_builtin_help(struct slash *slash)
 	}
 	command = slash_command_find(slash, find, strlen(find), &args);
 	if (!command) {
-		slash_printf(slash, "No such command: %s\n", find);
+		slash_println(slash, "No such command: %s", find);
 		return SLASH_EINVAL;
 	}
 
@@ -961,7 +979,11 @@ static int slash_builtin_history(struct slash *slash)
 	char *p = slash->history_head;
 
 	while (p != slash->history_tail) {
-		slash_putchar(slash, *p ? *p : '\n');
+		if (*p) {
+			slash_putchar(slash, *p);
+		} else {
+			slash_putnl(slash);
+		}
 		p = slash_history_increment(slash, p);
 	}
 
@@ -989,7 +1011,8 @@ static int slash_builtin_watch(struct slash *slash)
 	if (*endptr != '\0')
 		return SLASH_EUSAGE;
 
-	printf("Executing \"%s\" each %u ms - press <enter> to stop\n", slash->argv[2], interval);
+	slash_println(slash, "Executing \"%s\" each %u ms - press <enter> to stop",
+			slash->argv[2], interval);
 
 	/* Take a compy of the cmd */
 	char cmd[slash->line_size];

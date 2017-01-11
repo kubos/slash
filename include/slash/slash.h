@@ -33,6 +33,14 @@
 #include <termios.h>
 #endif
 
+#ifdef SLASH_LF // LF ONLY
+#define SLASH_NL "\n"
+#define SLASH_NL_LEN 1
+#else // CRLF (default)
+#define SLASH_NL "\r\n"
+#define SLASH_NL_LEN 2
+#endif
+
 /* Helper macros */
 #ifndef offsetof
 #define offsetof(type, member) ((size_t) &((type *)0)->member)
@@ -60,9 +68,8 @@
 
 #define __slash_command(_ident, _name, _func, _completer, _args, _help) 	\
 	__attribute__((section("slash")))				\
-	__attribute__((aligned(1))) \
 	__attribute__((used))						\
-	struct slash_command _ident = {					\
+	const struct slash_command _ident = {					\
 		.name  = _name,				\
 		.func  = _func,						\
 		.completer  = _completer,						\
@@ -110,7 +117,7 @@ typedef void (*slash_completer_func_t)(struct slash *slash, char * token);
 #define SLASH_ENOSPC	(-3)
 
 /* Command struct */
-struct __attribute__((aligned(1))) slash_command {
+struct slash_command {
 	/* Static data */
 	const char *name;
 	const slash_func_t func;
@@ -169,6 +176,8 @@ int slash_loop(struct slash *slash, const char *prompt_good, const char *prompt_
 int slash_getchar_nonblock(struct slash *slash);
 
 int slash_printf(struct slash *slash, const char *format, ...);
+
+#define slash_println(_slash, _fmt, ...) slash_printf(_slash, _fmt SLASH_NL, ## __VA_ARGS__)
 
 int slash_prefix_length(const char *s1, const char *s2);
 

@@ -31,6 +31,59 @@
 
 slash_command_group(csp, "Cubesat Space Protocol");
 
+static void csp_hex_dump (const char *desc, void *addr, int len)
+{
+	int i;
+	unsigned char buff[17];
+	unsigned char *pc = (unsigned char*)addr;
+
+	// Output description if given.
+	if (desc != NULL)
+		printf ("%s:\r\n", desc);
+
+	if (len == 0) {
+		printf("  ZERO LENGTH\r\n");
+		return;
+	}
+	if (len < 0) {
+		printf("  NEGATIVE LENGTH: %i\r\n",len);
+		return;
+	}
+
+	// Process every byte in the data.
+	for (i = 0; i < len; i++) {
+		// Multiple of 16 means new line (with line offset).
+
+		if ((i % 16) == 0) {
+			// Just don't print ASCII for the zeroth line.
+			if (i != 0)
+				printf ("  %s\r\n", buff);
+
+			// Output the offset.
+			printf ("  %p ", addr + i);
+		}
+
+		// Now the hex code for the specific character.
+		printf (" %02x", pc[i]);
+
+		// And store a printable ASCII character for later.
+		if ((pc[i] < 0x20) || (pc[i] > 0x7e))
+			buff[i % 16] = '.';
+		else
+			buff[i % 16] = pc[i];
+		buff[(i % 16) + 1] = '\0';
+	}
+
+	// Pad out last line if not exactly 16 characters.
+	while ((i % 16) != 0) {
+		printf ("   ");
+		i++;
+	}
+
+	// And print the final ASCII bit.
+	printf ("  %s\r\n", buff);
+}
+
 static int slash_csp_info(struct slash *slash)
 {
 #ifdef CSP_DEBUG
@@ -63,9 +116,9 @@ static int slash_csp_ping(struct slash *slash)
 	int result = csp_ping(node, timeout, size, CSP_SO_NONE);
 
 	if (result >= 0) {
-		slash_printf(slash, "Reply in %d [ms]\n", result);
+		slash_println(slash, "Reply in %d [ms]", result);
 	} else {
-		slash_printf(slash, "No reply\n");
+		slash_println(slash, "No reply");
 	}
 
 	return SLASH_SUCCESS;
@@ -273,8 +326,7 @@ static int slash_csp_cmp_peek(struct slash *slash)
 		return SLASH_EUSAGE;
 
 	unsigned int node = atoi(slash->argv[1]);
-	unsigned int address;
-	sscanf(slash->argv[2], "%x", &address);
+	unsigned int address = (unsigned int) strtoul(slash->argv[2], NULL, 16);
 	unsigned int len = atoi(slash->argv[3]);
 
 	unsigned int timeout = 1000;
@@ -305,8 +357,7 @@ static int slash_csp_cmp_poke(struct slash *slash)
 		return SLASH_EUSAGE;
 
 	unsigned int node = atoi(slash->argv[1]);
-	unsigned int address;
-	sscanf(slash->argv[2], "%x", &address);
+	unsigned int address = (unsigned int) strtoul(slash->argv[2], NULL, 16);
 	unsigned int timeout = 1000;
 	if (slash->argc > 4)
 		timeout = atoi(slash->argv[4]);
@@ -376,6 +427,7 @@ static int slash_csp_cmp_time(struct slash *slash)
 
 slash_command_sub(csp, time, slash_csp_cmp_time, "<node> <timestamp (0 GET, -1 SETLOCAL)> [timeout]", "Time");
 
+#ifdef CSP_USE_RDP
 static int slash_csp_rdpopt(struct slash *slash)
 {
 	if (slash->argc < 6)
@@ -394,3 +446,4 @@ static int slash_csp_rdpopt(struct slash *slash)
 }
 
 slash_command_sub(csp, rdpopt, slash_csp_rdpopt, "<window> <conn_to> <packet_to> <ack_to> <ack_count>", NULL);
+#endif
